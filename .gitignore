@@ -1,0 +1,30 @@
+﻿# Virtual environment — never commit
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Runtime data — generated at runtime, not source
+data/loldrivers/drivers.json
+data/snapshots/
+data/drivers/
+data/winspector.db
+logs/
+
+# Diagnostic scripts created during development
+check_*.py
+test_*.py
+gen_*.py
+
+# Temp files
+tree.txt
+*.tmp
+
+# OS
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
