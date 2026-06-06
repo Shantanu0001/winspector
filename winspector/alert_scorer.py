@@ -38,12 +38,8 @@ _KNOWN_SHELL_PARENTS = frozenset({
     "explorer.exe", "services.exe", "svchost.exe",
     "taskhostw.exe", "msiexec.exe", "wininit.exe",
     "winlogon.exe", "csrss.exe", "smss.exe",
-    # powershell.exe retained — user-interactive shells legitimately spawn child shells (e.g. powershell -> cmd /c whoami).
-    # Malicious chains are caught by RULE-007 (suspicious parent path) and RULE-008 (blank PE metadata) instead.
-    "powershell.exe", "pwsh.exe",
-    # python.exe retained for lab — WinSpector spawns PowerShell
-    # for signature checks. Remove in production deployment.
-    "python.exe",
+    "powershell.exe", "pwsh.exe","python.exe",
+    "ruby.exe", "rubyinstaller.exe", "splunkd.exe", "run.exe",
 })
 
 # Processes that legitimately make outbound network connections
@@ -80,6 +76,13 @@ _COMMON_PORTS = frozenset({
     1433, 3306, 5432, 27017,  # Databases
     9200, 5601,               # Elastic
     53, 123,                  # DNS, NTP
+})
+
+# Reconnaissance tools commonly used post-exploitation
+_RECON_TOOLS = frozenset({
+    "whoami.exe", "ipconfig.exe", "hostname.exe", "net.exe",
+    "netstat.exe", "tasklist.exe", "systeminfo.exe", "nltest.exe",
+    "nslookup.exe", "ping.exe", "arp.exe", "route.exe",
 })
 
 
@@ -378,6 +381,16 @@ def score_event(record: EventRecord) -> ScoredAlert:
             rule_hits.append("RULE-004-EID1")
             details.append(f"process image in suspicious path: {image}")
 
+        # RULE-015: recon tool spawned by suspicious-path binary
+        if (image_name in _RECON_TOOLS
+                and _in_suspicious_path(parent_img)):
+            score += 50
+            rule_hits.append("RULE-015")
+            details.append(
+                f"recon tool {image_name} spawned by "
+                f"suspicious-path binary: {parent_img.split(chr(92))[-1]}"
+            )
+
     # ── Sysmon EID 3 — Network Connection ──
     elif eid == 3:
         image      = f.get("Image", "")
@@ -502,6 +515,16 @@ def score_event(record: EventRecord) -> ScoredAlert:
             score += 40
             rule_hits.append("RULE-004-EID4688")
             details.append(f"new process in suspicious path: {new_proc}")
+
+        # RULE-015: recon tool spawned by suspicious-path binary
+        if (new_name in _RECON_TOOLS
+                and _in_suspicious_path(parent_proc)):
+            score += 50
+            rule_hits.append("RULE-015")
+            details.append(
+                f"recon tool {new_name} spawned by "
+                f"suspicious-path binary: {parent_proc.split(chr(92))[-1]}"
+            )
 
     # ── System EID 7045 — New Service ──
     elif eid == 7045:
