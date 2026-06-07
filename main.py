@@ -11,6 +11,7 @@ from pathlib import Path
 from winspector.alert_scorer import score_driver, score_event, score_process
 from winspector.dashboard import Dashboard
 from winspector.driver_scanner import DriverScanner
+from winspector.elastic_exporter import ElasticExporter
 from winspector.event_log_miner import EventLogMiner
 from winspector.models import AlertLevel
 from winspector.process_watcher import ProcessWatcher
@@ -108,6 +109,12 @@ def main() -> None:
     scanner = DriverScanner()
     miner   = EventLogMiner(db_path=Path("data") / "winspector.db")
 
+    exporter = ElasticExporter(
+        elastic_url="http://192.168.91.129:9200",
+        index="winspector-alerts",
+        batch_size=10,
+    )
+
     dashboard = Dashboard()
 
     with dashboard:
@@ -143,6 +150,8 @@ def main() -> None:
                     for proc in diff.created:
                         alert = score_process(proc)
                         dashboard.state.add_process_created(proc, alert)
+                        if alert.score >= 30:
+                            exporter.add(alert)
                     for proc in diff.terminated:
                         dashboard.state.add_process_terminated(proc)
 
@@ -153,6 +162,8 @@ def main() -> None:
                     for evt in new_events:
                         alert = score_event(evt)
                         dashboard.state.add_event(evt, alert)
+                        if alert.score >= 30:
+                            exporter.add(alert)
 
                 # Driver scan
                 if time.monotonic() - last_driver_scan >= DRIVER_POLL_INTERVAL:
@@ -165,11 +176,13 @@ def main() -> None:
                     dashboard.state.last_driver_scan = _now()
                     last_driver_scan = time.monotonic()
 
-                dashboard.update()
+                # Flush any pending alerts to Elastic
+                exporter.flush()
 
         except KeyboardInterrupt:
-            logger.info("winspector_stop")
+            exporter.flush()  # flush remaining before exit
             miner.close()
+            logger.info("winspector_stop")
 
 
 def _now() -> str:
