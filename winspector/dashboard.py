@@ -350,17 +350,55 @@ def build_layout(state: DashboardState) -> Layout:
 
 # Public interface
 
+def _disable_quickedit() -> None:
+    """Disable Windows QuickEdit — prevents terminal pause on click."""
+    try:
+        import ctypes
+        import ctypes.wintypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-10)
+        m = ctypes.wintypes.DWORD()
+        k.GetConsoleMode(h, ctypes.byref(m))
+        m.value &= ~0x0040
+        m.value &= ~0x0020
+        k.SetConsoleMode(h, m)
+    except Exception:
+        pass
+
+
+def _enable_vt100() -> None:
+    """Enable VT100 virtual terminal processing in Windows conhost."""
+    try:
+        import ctypes
+        import ctypes.wintypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        m = ctypes.wintypes.DWORD()
+        k.GetConsoleMode(h, ctypes.byref(m))
+        m.value |= 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        k.SetConsoleMode(h, m)
+    except Exception:
+        pass
+
+
 class Dashboard:
-    """ Wraps Rich Live display. Call update() each poll cycle to refresh."""
+    """
+    WinSpector terminal dashboard using Rich Live with screen=True.
+    Requires VT100 mode enabled and event logs cleared before each session.
+    Call update() each poll cycle to refresh.
+    """
 
     def __init__(self) -> None:
-        self.state   = DashboardState()
+        _disable_quickedit()
+        _enable_vt100()
+        self.state    = DashboardState()
         self._console = Console()
-        self._live   = Live(
+        self._live    = Live(
             build_layout(self.state),
             console=self._console,
             refresh_per_second=1,
             screen=True,
+            vertical_overflow="visible",
         )
 
     def __enter__(self) -> "Dashboard":
