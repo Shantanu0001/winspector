@@ -28,3 +28,10 @@ desktop.ini
 
 # IDE
 .vscode/settings.json
+# Runtime artifacts — never commit these
+data/snapshots/diff_*.json
+data/drivers/drivers_*.json
+logs/
+winspector/__pycache__/
+*.pyc
+winspector.db
