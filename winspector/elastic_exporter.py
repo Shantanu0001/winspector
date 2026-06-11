@@ -2,6 +2,7 @@
  Sends scored WinSpector alerts to Elasticsearch via HTTP POST.
  Uses the Elasticsearch Bulk API for efficient multi-document ingestion.
 
+SQLite-backed persistent queue.
  Alerts are written to disk immediately when added. The exporter reads from the queue on flush. Alerts survive process crashes and are retried automatically on the next flush cycle.
 
  Security design:
@@ -16,11 +17,14 @@
  SECURITY WARNING: WinSpector sends alert data over plain HTTP with no authentication. 
  Only safe on an isolated, trusted network segment with xpack.security.enabled: false. Do NOT point WINSPECTOR_ELASTIC_URL at an internet-reachable instance without enabling TLS and API-key auth.
 """
+
 from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
+import ssl
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +32,7 @@ import urllib.request
 import urllib.error
 
 from .models import ScoredAlert
-from .config import COMPUTER_NAME
+from .config import COMPUTER_NAME, ELASTIC_API_KEY
 
 logger = logging.getLogger("winspector.elastic_exporter")
 
@@ -44,7 +48,7 @@ class ElasticExporter:
     """
     Exports ScoredAlert objects to Elasticsearch via the Bulk API.
 
-    SQLite-backed persistent queue :-
+    SQLite-backed persistent queue:-
     Alerts survive process crashes — they are written to disk immediately in add() and removed only after successful export.
     """
 
@@ -82,11 +86,31 @@ class ElasticExporter:
 
         self._check_connectivity()
 
+    def _ssl_context(self):
+        """
+        Return an SSL context for HTTPS connections.
+        If WINSPECTOR_ELASTIC_VERIFY_SSL is set to 'false', certificate
+        verification is disabled (useful for self-signed lab certs).
+        Default: verify certificates (secure).
+        """
+        verify = os.environ.get("WINSPECTOR_ELASTIC_VERIFY_SSL", "true").lower()
+        if verify == "false":
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return ctx
+        if self._url.startswith("https://"):
+            return ssl.create_default_context()
+        return None
+
     def _check_connectivity(self) -> None:
         """Ping Elasticsearch health endpoint. Log warning if unreachable."""
         try:
             req = urllib.request.Request(f"{self._url}/_cluster/health")
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            if ELASTIC_API_KEY:
+                req.add_header("Authorization", f"ApiKey {ELASTIC_API_KEY}")
+            ctx = self._ssl_context()
+            with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
                 data = json.loads(resp.read())
                 logger.info(
                     "elastic_connected",
@@ -154,16 +178,20 @@ class ElasticExporter:
 
         try:
             data = bulk_body.encode("utf-8")
+            headers = {
+                "Content-Type": "application/x-ndjson",
+                "Accept":       "application/json",
+            }
+            if ELASTIC_API_KEY:
+                headers["Authorization"] = f"ApiKey {ELASTIC_API_KEY}"
             req  = urllib.request.Request(
                 f"{self._url}/_bulk",
                 data=data,
-                headers={
-                    "Content-Type": "application/x-ndjson",
-                    "Accept":       "application/json",
-                },
+                headers=headers,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            ctx = self._ssl_context()
+            with urllib.request.urlopen(req, timeout=self._timeout, context=ctx) as resp:
                 result = json.loads(resp.read())
 
             if result.get("errors"):
