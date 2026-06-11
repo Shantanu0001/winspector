@@ -35,3 +35,7 @@ logs/
 winspector/__pycache__/
 *.pyc
 winspector.db
+data/winspector.db
+data/winspector.db-shm
+data/winspector.db-wal
+query
