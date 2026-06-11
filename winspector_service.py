@@ -1,4 +1,15 @@
-﻿from __future__ import annotations
+# winspector_service.py
+#
+# Windows Service wrapper for WinSpector.
+# Installs WinSpector as a proper Windows service that starts on boot,
+# runs without a logged-in user, and restarts automatically on crash.
+#
+# Install:   python winspector_service.py install
+# Start:     python winspector_service.py start
+# Stop:      python winspector_service.py stop
+# Remove:    python winspector_service.py remove
+
+from __future__ import annotations
 
 import os
 import sys
@@ -12,12 +23,12 @@ import win32serviceutil
 import win32event
 import servicemanager
 
-# Project directory — everything resolves relative to this
+# Project directory - everything resolves relative to this
 _PROJECT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_PROJECT_DIR))
 os.chdir(str(_PROJECT_DIR))
 
-# Point pythonservice.exe at the venv Python so it can find all packages
+# Use the venv Python directly so all packages are importable
 _PYTHON_EXE = str(_PROJECT_DIR / ".venv" / "Scripts" / "python.exe")
 
 
@@ -38,12 +49,14 @@ class WinSpectorService(win32serviceutil.ServiceFramework):
         self._thread     = None
 
     def SvcStop(self):
+        """Called by SCM when the service is asked to stop."""
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
         win32event.SetEvent(self._stop_event)
         if self._thread:
             self._thread.join(timeout=15)
 
     def SvcDoRun(self):
+        """Main service entry point."""
         # Report running immediately so SCM does not time out
         self.ReportServiceStatus(win32service.SERVICE_RUNNING)
 
@@ -71,16 +84,15 @@ class WinSpectorService(win32serviceutil.ServiceFramework):
         )
 
     def _run_winspector(self):
+        """Full WinSpector detection loop."""
         try:
             from winspector.config import ELASTIC_URL
             from winspector.alert_scorer import score_event, score_process
             from winspector.driver_scanner import DriverScanner
             from winspector.elastic_exporter import ElasticExporter
             from winspector.event_log_miner import EventLogMiner
-            from winspector.models import AlertLevel
             from winspector.process_watcher import ProcessWatcher
 
-            import hashlib
             import logging.config
             from datetime import datetime, timezone
 
@@ -114,13 +126,15 @@ class WinSpectorService(win32serviceutil.ServiceFramework):
             logger = logging.getLogger("winspector.service")
             logger.info("service_loop_start")
 
+            db_path  = Path("data") / "winspector.db"
             watcher  = ProcessWatcher()
             scanner  = DriverScanner()
-            miner    = EventLogMiner(db_path=Path("data") / "winspector.db")
+            miner    = EventLogMiner(db_path=db_path)
             exporter = ElasticExporter(
                 elastic_url=ELASTIC_URL,
                 index="winspector-alerts",
                 batch_size=10,
+                db_path=db_path,
             )
 
             PROCESS_POLL_INTERVAL = 5
@@ -158,7 +172,7 @@ class WinSpectorService(win32serviceutil.ServiceFramework):
 
                 exporter.flush()
 
-            exporter.flush()
+            exporter.close()
             miner.close()
             logger.info("service_loop_stop")
 
@@ -167,9 +181,11 @@ class WinSpectorService(win32serviceutil.ServiceFramework):
             raise
 
     def _is_stopping(self) -> bool:
-        return win32event.WaitForSingleObject(
-            self._stop_event, 0
-        ) == win32event.WAIT_OBJECT_0
+        """Returns True if the stop event has been signalled."""
+        return (
+            win32event.WaitForSingleObject(self._stop_event, 0)
+            == win32event.WAIT_OBJECT_0
+        )
 
 
 if __name__ == "__main__":
