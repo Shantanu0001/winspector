@@ -158,8 +158,8 @@ def main() -> None:
 
                 # Event log
                 new_events = miner.poll()
+                dashboard.state.last_event_poll = _now()
                 if new_events:
-                    dashboard.state.last_event_poll = _now()
                     for evt in new_events:
                         alert = score_event(evt)
                         dashboard.state.add_event(evt, alert)
@@ -177,8 +177,11 @@ def main() -> None:
                     dashboard.state.last_driver_scan = _now()
                     last_driver_scan = time.monotonic()
 
-                # Flush any pending alerts to Elastic
+                # Flush pending alerts to Elastic
                 exporter.flush()
+
+                # Redraw dashboard
+                dashboard.update()
 
         except KeyboardInterrupt:
             exporter.flush()  # flush remaining before exit

@@ -14,7 +14,6 @@ from typing import Optional
 from rich.columns import Columns
 from rich.console import Console
 from rich.layout import Layout
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -353,8 +352,7 @@ def build_layout(state: DashboardState) -> Layout:
 def _disable_quickedit() -> None:
     """Disable Windows QuickEdit — prevents terminal pause on click."""
     try:
-        import ctypes
-        import ctypes.wintypes
+        import ctypes, ctypes.wintypes
         k = ctypes.windll.kernel32
         h = k.GetStdHandle(-10)
         m = ctypes.wintypes.DWORD()
@@ -369,22 +367,56 @@ def _disable_quickedit() -> None:
 def _enable_vt100() -> None:
     """Enable VT100 virtual terminal processing in Windows conhost."""
     try:
-        import ctypes
-        import ctypes.wintypes
+        import ctypes, ctypes.wintypes
         k = ctypes.windll.kernel32
-        h = k.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        h = k.GetStdHandle(-11)
         m = ctypes.wintypes.DWORD()
         k.GetConsoleMode(h, ctypes.byref(m))
-        m.value |= 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        m.value |= 0x0004
         k.SetConsoleMode(h, m)
     except Exception:
         pass
 
 
+def _clear_console() -> None:
+    """
+    Clear the console using Windows API for complete buffer wipe.
+    More thorough than ANSI codes — eliminates scrollback artifacts.
+    """
+    try:
+        import ctypes, ctypes.wintypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)
+        # Get console screen buffer info
+        class COORD(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+        class SMALL_RECT(ctypes.Structure):
+            _fields_ = [("Left", ctypes.c_short), ("Top", ctypes.c_short),
+                        ("Right", ctypes.c_short), ("Bottom", ctypes.c_short)]
+        class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+            _fields_ = [("dwSize", COORD), ("dwCursorPosition", COORD),
+                        ("wAttributes", ctypes.c_ushort), ("srWindow", SMALL_RECT),
+                        ("dwMaximumWindowSize", COORD)]
+        csbi = CONSOLE_SCREEN_BUFFER_INFO()
+        k.GetConsoleScreenBufferInfo(h, ctypes.byref(csbi))
+        # Fill entire buffer with spaces
+        cells = csbi.dwSize.X * csbi.dwSize.Y
+        written = ctypes.c_ulong(0)
+        origin = COORD(0, 0)
+        k.FillConsoleOutputCharacterW(h, ord(" "), cells, origin, ctypes.byref(written))
+        k.FillConsoleOutputAttribute(h, csbi.wAttributes, cells, origin, ctypes.byref(written))
+        # Move cursor to top-left
+        k.SetConsoleCursorPosition(h, origin)
+    except Exception:
+        # Fallback to ANSI if API fails
+        print("[2J[H", end="", flush=True)
+
+
 class Dashboard:
     """
-    WinSpector terminal dashboard using Rich Live with screen=True.
-    Requires VT100 mode enabled and event logs cleared before each session.
+    WinSpector terminal dashboard.
+    Uses Windows API console clear for stable full-buffer wipe —
+    no scrollback artifacts on any Windows terminal.
     Call update() each poll cycle to refresh.
     """
 
@@ -393,21 +425,15 @@ class Dashboard:
         _enable_vt100()
         self.state    = DashboardState()
         self._console = Console()
-        self._live    = Live(
-            build_layout(self.state),
-            console=self._console,
-            refresh_per_second=1,
-            screen=True,
-            vertical_overflow="visible",
-        )
+        self._first   = True
 
     def __enter__(self) -> "Dashboard":
-        self._live.__enter__()
         return self
 
     def __exit__(self, *args) -> None:
-        self._live.__exit__(*args)
+        print("")
 
     def update(self) -> None:
-        """Rebuild and push the layout to the terminal."""
-        self._live.update(build_layout(self.state))
+        """Clear console and redraw the full layout."""
+        _clear_console()
+        self._console.print(build_layout(self.state))
