@@ -1,4 +1,4 @@
-# Module 4: Alert Scorer - Applies detection rules to ProcessRecord, DriverRecord, and EventRecord objects and produces ScoredAlert output.
+# Alert Scorer - Applies detection rules to ProcessRecord, DriverRecord, and EventRecord objects and produces ScoredAlert output.
 
 """
  Design principles:
@@ -101,6 +101,38 @@ _CERTUTIL_SUSPICIOUS_ARGS = frozenset({
     "-urlcache", "-decode", "-encode", "-decodehex",
 })
 
+# PowerShell obfuscation/download indicators
+_PS_ENCODED_FLAGS = frozenset({
+    "-encodedcommand", "-enc", "-enco",
+})
+
+_PS_DOWNLOAD_CRADLES = frozenset({
+    "invoke-expression", "iex", "downloadstring", "downloadfile",
+    "webclient", "net.webclient", "invoke-webrequest", "wget", "curl",
+})
+
+# WMI process parents — legitimate WMI spawns shells
+_WMI_PARENTS = frozenset({
+    "wmiprvse.exe", "wbem\\wmiprvse.exe",
+})
+
+# Persistence mechanisms
+_SCHTASKS_CREATE = frozenset({"/create", "-create"})
+_REG_RUN_KEYS = frozenset({
+    "software\\microsoft\\windows\\currentversion\\run",
+    "software\\microsoft\\windows\\currentversion\\runonce",
+    "software\\microsoft\\windows nt\\currentversion\\winlogon",
+})
+
+# RULE-019: Processes that legitimately access LSASS
+# taskmgr.exe reads LSASS for memory display in Task Manager
+# MsMpEng.exe is Windows Defender — legitimate LSASS access
+# svchost.exe hosts many system services that access LSASS
+_LSASS_ACCESS_WHITELIST = frozenset({
+    "taskmgr.exe", "msmpeng.exe", "svchost.exe",
+    "mssense.exe", "csrss.exe", "wininit.exe",
+})
+
 
 # Score -> AlertLevel mapping
 
@@ -173,8 +205,6 @@ def score_process(record: ProcessRecord) -> ScoredAlert:
 
     # RULE-001: svchost.exe with non-services.exe parent
     if name == "svchost.exe":
-        # We don't have ppid_name in ProcessRecord directly, we use PPID and check if it matches known services.exe PIDs.
-        # Conservative: flag if cmdline has no -k flag (RULE-002 covers this)
         pass
 
     # RULE-002: svchost.exe with no -k flag
@@ -182,9 +212,6 @@ def score_process(record: ProcessRecord) -> ScoredAlert:
         score += 60
         rule_hits.append("RULE-002")
         details.append("svchost.exe has no -k flag in cmdline")
-
-    # RULE-003: powershell.exe spawned — check if parent is cmd.exe
-    # (parent name not available in ProcessRecord; scored in event rules)
 
     # RULE-004: unsigned binary in suspicious path
     if not record.is_signed and _in_suspicious_path(exe_path):
@@ -197,9 +224,6 @@ def score_process(record: ProcessRecord) -> ScoredAlert:
         score += 30
         rule_hits.append("RULE-005")
         details.append("unsigned binary")
-
-    # RULE-008: blank PE metadata (no FileVersion/Description/Company)
-    # Not available from psutil — applied in event scorer for Sysmon EID 1
 
     # Suppress WinSpector's own processes from high scores
     if name in _WINSPECTOR_PROCESSES and _in_standard_system_path(exe_path):
@@ -323,7 +347,7 @@ def score_event(record: EventRecord) -> ScoredAlert:
 
     eid = record.event_id
 
-    # ── Sysmon EID 1 — Process Create ──
+    # -- Sysmon EID 1 -- Process Create --
     if eid == 1:
         image       = f.get("Image", "")
         image_name  = image.split("\\")[-1].lower()
@@ -342,7 +366,7 @@ def score_event(record: EventRecord) -> ScoredAlert:
                 raw=record.to_dict(),
             )
 
-        # Suppress WinSpector's signature-check powershell subprocesses, parent is our own python.exe in the venv, cmdline is our known pattern
+        # Suppress WinSpector's signature-check powershell subprocesses
         if (image_name == "powershell.exe"
                 and parent_name in _WINSPECTOR_PROCESSES
                 and any(frag in parent_img.lower()
@@ -390,8 +414,7 @@ def score_event(record: EventRecord) -> ScoredAlert:
             rule_hits.append("RULE-008")
             details.append("blank PE metadata (FileVersion/Description/Company)")
 
-        # RULE-004 variant: unsigned binary in suspicious path
-        # (Sysmon EID 1 doesn't give signed status directly, we check the image path as a proxy)
+        # RULE-004 variant: process image in suspicious path
         if _in_suspicious_path(image):
             score += 40
             rule_hits.append("RULE-004-EID1")
@@ -422,7 +445,48 @@ def score_event(record: EventRecord) -> ScoredAlert:
                 rule_hits.append("RULE-016")
                 details.append(f"LOLBin execution: {image_name}")
 
-    # ── Sysmon EID 3 — Network Connection ──
+        # RULE-017: PowerShell encoded command (T1027)
+        if image_name in {"powershell.exe", "pwsh.exe"}:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(flag in cmdline_lower for flag in _PS_ENCODED_FLAGS):
+                score += 65
+                rule_hits.append("RULE-017")
+                details.append("PowerShell encoded command (-EncodedCommand)")
+
+        # RULE-018: PowerShell download cradle (T1059.001)
+        if image_name in {"powershell.exe", "pwsh.exe"}:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(cradle in cmdline_lower for cradle in _PS_DOWNLOAD_CRADLES):
+                score += 70
+                rule_hits.append("RULE-018")
+                details.append("PowerShell download cradle detected")
+
+        # RULE-023: WMI spawning child process (T1047)
+        if parent_img and any(
+            wmi in parent_img.lower() for wmi in _WMI_PARENTS
+        ):
+            score += 65
+            rule_hits.append("RULE-023")
+            details.append(f"process spawned by WMI: {image_name}")
+
+        # RULE-025: Scheduled task creation (T1053.005)
+        if image_name == "schtasks.exe":
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(flag in cmdline_lower for flag in _SCHTASKS_CREATE):
+                score += 60
+                rule_hits.append("RULE-025")
+                details.append("scheduled task creation via schtasks.exe")
+
+        # RULE-026: Registry run key modification (T1547.001)
+        if image_name in {"reg.exe", "regedit.exe"}:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if ("add" in cmdline_lower and
+                    any(key in cmdline_lower for key in _REG_RUN_KEYS)):
+                score += 55
+                rule_hits.append("RULE-026")
+                details.append("registry run key modification detected")
+
+    # -- Sysmon EID 3 -- Network Connection --
     elif eid == 3:
         image      = f.get("Image", "")
         image_name = image.split("\\")[-1].lower()
@@ -431,7 +495,6 @@ def score_event(record: EventRecord) -> ScoredAlert:
         initiated  = f.get("Initiated", "").lower() == "true"
 
         if not initiated:
-            # Only score outbound connections
             pass
         else:
             try:
@@ -459,7 +522,54 @@ def score_event(record: EventRecord) -> ScoredAlert:
                     f"from {image_name}"
                 )
 
-    # ── Sysmon EID 11 — File Create ──
+    # -- Sysmon EID 7 -- Image Load --
+    elif eid == 7:
+        image      = f.get("Image", "")
+        image_name = image.split("\\")[-1].lower()
+        img_loaded = f.get("ImageLoaded", "").lower()
+        signed     = f.get("Signed", "").lower()
+
+        # RULE-021: DLL loaded from suspicious path (T1574)
+        if _in_suspicious_path(img_loaded):
+            score += 55
+            rule_hits.append("RULE-021")
+            details.append(f"DLL loaded from suspicious path: {img_loaded}")
+
+    # -- Sysmon EID 8 -- CreateRemoteThread --
+    elif eid == 8:
+        source_image = f.get("SourceImage", "")
+        target_image = f.get("TargetImage", "")
+        source_name  = source_image.split("\\")[-1].lower()
+        target_name  = target_image.split("\\")[-1].lower()
+
+        # RULE-020: Remote thread injection (T1055)
+        score += 75
+        rule_hits.append("RULE-020")
+        details.append(
+            f"remote thread created by {source_name} "
+            f"in target {target_name}"
+        )
+
+    # -- Sysmon EID 10 -- Process Access --
+    elif eid == 10:
+        source_image = f.get("SourceImage", "")
+        target_image = f.get("TargetImage", "")
+        source_name  = source_image.split("\\")[-1].lower()
+        target_name  = target_image.split("\\")[-1].lower()
+        granted_access = f.get("GrantedAccess", "")
+
+        # RULE-019: LSASS access (T1003.001 - OS Credential Dumping)
+        # Whitelist: processes that legitimately access LSASS
+        if (target_name == "lsass.exe"
+                and source_name not in _LSASS_ACCESS_WHITELIST):
+            score += 80
+            rule_hits.append("RULE-019")
+            details.append(
+                f"LSASS accessed by {source_name} "
+                f"(GrantedAccess={granted_access})"
+            )
+
+    # -- Sysmon EID 11 -- File Create --
     elif eid == 11:
         image       = f.get("Image", "")
         image_name  = image.split("\\")[-1].lower()
@@ -477,7 +587,7 @@ def score_event(record: EventRecord) -> ScoredAlert:
                 f"{f.get('TargetFilename','')}"
             )
 
-    # ── Security EID 4688 — Process Creation ──
+    # -- Security EID 4688 -- Process Creation --
     elif eid == 4688:
         new_proc    = f.get("NewProcessName", "")
         new_name    = new_proc.split("\\")[-1].lower()
@@ -531,9 +641,7 @@ def score_event(record: EventRecord) -> ScoredAlert:
         if new_name == "cmd.exe" and _in_suspicious_path(parent_proc):
             score += 60
             rule_hits.append("RULE-007")
-            details.append(
-                f"cmd.exe from suspicious-path parent: {parent_proc}"
-            )
+            details.append(f"cmd.exe from suspicious-path parent: {parent_proc}")
 
         # RULE-002: svchost with no -k flag
         if new_name == "svchost.exe" and "-k" not in cmdline:
@@ -563,16 +671,62 @@ def score_event(record: EventRecord) -> ScoredAlert:
             if any(arg in cmdline_lower for arg in _CERTUTIL_SUSPICIOUS_ARGS):
                 score += 60
                 rule_hits.append("RULE-016")
-                details.append(
-                    f"LOLBin abuse: {new_name} with suspicious args"
-                )
+                details.append(f"LOLBin abuse: {new_name} with suspicious args")
             elif new_name in {"mshta.exe", "wscript.exe", "cscript.exe",
                               "regsvr32.exe", "rundll32.exe"}:
                 score += 35
                 rule_hits.append("RULE-016")
                 details.append(f"LOLBin execution: {new_name}")
 
-    # ── System EID 7045 — New Service ──
+        # RULE-017: PowerShell encoded command (T1027)
+        if new_name in {"powershell.exe", "pwsh.exe"}:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(flag in cmdline_lower for flag in _PS_ENCODED_FLAGS):
+                score += 65
+                rule_hits.append("RULE-017")
+                details.append("PowerShell encoded command (-EncodedCommand)")
+
+        # RULE-018: PowerShell download cradle (T1059.001)
+        if new_name in {"powershell.exe", "pwsh.exe"}:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(cradle in cmdline_lower for cradle in _PS_DOWNLOAD_CRADLES):
+                score += 70
+                rule_hits.append("RULE-018")
+                details.append("PowerShell download cradle detected")
+
+        # RULE-023: WMI spawning child process (T1047)
+        if parent_proc and any(
+            wmi in parent_proc.lower() for wmi in _WMI_PARENTS
+        ):
+            score += 65
+            rule_hits.append("RULE-023")
+            details.append(f"process spawned by WMI: {new_name}")
+
+        # RULE-024: Base64 string in command line (T1027)
+        cmdline_lower = f.get("CommandLine", "").lower()
+        if ("base64" in cmdline_lower or
+                "-e " in cmdline_lower and
+                len(f.get("CommandLine", "")) > 100):
+            score += 45
+            rule_hits.append("RULE-024")
+            details.append("base64/encoded content in command line")
+
+        # RULE-025: Scheduled task creation (T1053.005)
+        if new_name == "schtasks.exe":
+            if any(flag in cmdline_lower for flag in _SCHTASKS_CREATE):
+                score += 60
+                rule_hits.append("RULE-025")
+                details.append("scheduled task creation via schtasks.exe")
+
+        # RULE-026: Registry run key modification (T1547.001)
+        if new_name in {"reg.exe", "regedit.exe"}:
+            if ("add" in cmdline_lower and
+                    any(key in cmdline_lower for key in _REG_RUN_KEYS)):
+                score += 55
+                rule_hits.append("RULE-026")
+                details.append("registry run key modification detected")
+
+    # -- System EID 7045 -- New Service --
     elif eid == 7045:
         svc_name = f.get("ServiceName", "")
         img_path = f.get("ImagePath", "").lower()
