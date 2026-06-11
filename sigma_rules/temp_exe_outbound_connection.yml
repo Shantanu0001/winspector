@@ -1,0 +1,41 @@
+title: Executable in Temp Directory Making Outbound Network Connection
+id: 8f3e2a1c-4b5d-4e6f-9a8b-1c2d3e4f5a6b
+status: experimental
+description: |
+    Detects a process executing from a user-writable temporary directory
+    (%TEMP% or %APPDATA%) that establishes an outbound TCP connection.
+    This pattern was observed during a controlled meterpreter reverse_tcp
+    test (Week 4) where the payload connected back to the attacker on
+    a non-standard port within seconds of execution.
+references:
+    - https://attack.mitre.org/techniques/T1105/
+    - https://attack.mitre.org/techniques/T1071/001/
+author: helix-d3t0x
+date: 2026-06-11
+tags:
+
+    - attack.t1071.001
+    - attack.execution
+    - attack.t1105
+logsource:
+    category: network_connection
+    product: windows
+detection:
+    selection_image:
+        Image|contains:
+            - '\AppData\Local\Temp\'
+            - '\AppData\Roaming\'
+    selection_connection:
+        Initiated: 'true'
+    filter_common_ports:
+        DestinationPort:
+            - 80
+            - 443
+            - 8080
+            - 8443
+    condition: selection_image and selection_connection and not filter_common_ports
+falsepositives:
+    - Legitimate installers or updaters running from temp directories
+      that phone home over non-standard ports (rare)
+    - Portable applications intentionally run from temp locations
+level: high

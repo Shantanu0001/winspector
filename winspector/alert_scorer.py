@@ -58,9 +58,13 @@ _WINSPECTOR_PROCESSES = frozenset({
 })
 
 # Path fragments that identify WinSpector's own process chain
-# Used to suppress self-generated telemetry from scoring
+# Used to suppress self-generated telemetry from scoring.
+# WINSPECTOR_INSTALL_DIR is computed dynamically from the install location
+# so this works regardless of where the repo is cloned.
+from .config import WINSPECTOR_INSTALL_DIR
+
 _WINSPECTOR_PATH_FRAGMENTS = frozenset({
-    "\\projects\\winspector\\",
+    WINSPECTOR_INSTALL_DIR,
     "\\.venv\\scripts\\",
 })
 
@@ -83,6 +87,18 @@ _RECON_TOOLS = frozenset({
     "whoami.exe", "ipconfig.exe", "hostname.exe", "net.exe",
     "netstat.exe", "tasklist.exe", "systeminfo.exe", "nltest.exe",
     "nslookup.exe", "ping.exe", "arp.exe", "route.exe",
+})
+
+# LOLBins commonly abused for download/execute
+_LOLBIN_DOWNLOAD_TOOLS = frozenset({
+    "certutil.exe", "bitsadmin.exe", "mshta.exe",
+    "wscript.exe", "cscript.exe", "regsvr32.exe",
+    "rundll32.exe", "msiexec.exe", "installutil.exe",
+})
+
+# Certutil-specific suspicious flags
+_CERTUTIL_SUSPICIOUS_ARGS = frozenset({
+    "-urlcache", "-decode", "-encode", "-decodehex",
 })
 
 
@@ -391,6 +407,21 @@ def score_event(record: EventRecord) -> ScoredAlert:
                 f"suspicious-path binary: {parent_img.split(chr(92))[-1]}"
             )
 
+        # RULE-016: LOLBin download/execute abuse
+        if image_name in _LOLBIN_DOWNLOAD_TOOLS:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(arg in cmdline_lower for arg in _CERTUTIL_SUSPICIOUS_ARGS):
+                score += 60
+                rule_hits.append("RULE-016")
+                details.append(
+                    f"LOLBin abuse: {image_name} with suspicious args"
+                )
+            elif image_name in {"mshta.exe", "wscript.exe", "cscript.exe",
+                                "regsvr32.exe", "rundll32.exe"}:
+                score += 35
+                rule_hits.append("RULE-016")
+                details.append(f"LOLBin execution: {image_name}")
+
     # ── Sysmon EID 3 — Network Connection ──
     elif eid == 3:
         image      = f.get("Image", "")
@@ -525,6 +556,21 @@ def score_event(record: EventRecord) -> ScoredAlert:
                 f"recon tool {new_name} spawned by "
                 f"suspicious-path binary: {parent_proc.split(chr(92))[-1]}"
             )
+
+        # RULE-016: LOLBin download/execute abuse
+        if new_name in _LOLBIN_DOWNLOAD_TOOLS:
+            cmdline_lower = f.get("CommandLine", "").lower()
+            if any(arg in cmdline_lower for arg in _CERTUTIL_SUSPICIOUS_ARGS):
+                score += 60
+                rule_hits.append("RULE-016")
+                details.append(
+                    f"LOLBin abuse: {new_name} with suspicious args"
+                )
+            elif new_name in {"mshta.exe", "wscript.exe", "cscript.exe",
+                              "regsvr32.exe", "rundll32.exe"}:
+                score += 35
+                rule_hits.append("RULE-016")
+                details.append(f"LOLBin execution: {new_name}")
 
     # ── System EID 7045 — New Service ──
     elif eid == 7045:

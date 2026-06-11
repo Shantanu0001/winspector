@@ -21,6 +21,7 @@ import urllib.request
 import urllib.error
 
 from .models import ScoredAlert
+from .config import COMPUTER_NAME
 
 logger = logging.getLogger("winspector.elastic_exporter")
 
@@ -38,7 +39,7 @@ class ElasticExporter:
         elastic_url: str,
         index: str = "winspector-alerts",
         batch_size: int = 20,
-        timeout_seconds: int = 10,
+        timeout_seconds: int = 3,
     ) -> None:
         # Strip trailing slash
         self._url          = elastic_url.rstrip("/")
@@ -57,7 +58,7 @@ class ElasticExporter:
         try:
             url = f"{self._url}/_cluster/health"
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=2) as resp:
                 data = json.loads(resp.read())
                 status = data.get("status", "unknown")
                 logger.info(
@@ -175,7 +176,7 @@ class ElasticExporter:
                 "entity_path":  alert.entity_path,
                 "rule_hits":    alert.rule_hits,
                 "detail":       alert.detail,
-                "computer":     "WINSPECTOR-HOST",
+                "computer":     COMPUTER_NAME,
                 "ingested_at":  datetime.now(timezone.utc).isoformat(),
             }
 

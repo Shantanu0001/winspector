@@ -1,0 +1,49 @@
+title: Reconnaissance Tool Spawned by Process in Suspicious Path
+id: 7d4c1b9a-3e2f-4a5b-8c7d-9e1f2a3b4c5d
+status: experimental
+description: |
+    Detects common Windows reconnaissance commands (whoami, ipconfig,
+    hostname, net, etc.) being spawned directly by a parent process
+    executing from %TEMP% or %APPDATA%. This pattern was observed
+    during a self-test (Week 7) where a binary masquerading as
+    svchost32.exe was placed in %TEMP% and used to run whoami
+    for initial reconnaissance, mimicking common post-exploitation
+    behavior.
+references:
+    - https://attack.mitre.org/techniques/T1057/
+    - https://attack.mitre.org/techniques/T1082/
+    - https://attack.mitre.org/techniques/T1036/
+author: helix-d3t0x
+date: 2026-06-11
+tags:
+    - attack.discovery
+    - attack.t1057
+    - attack.t1082
+
+    - attack.t1036
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_recon:
+        Image|endswith:
+            - '\whoami.exe'
+            - '\ipconfig.exe'
+            - '\hostname.exe'
+            - '\net.exe'
+            - '\net1.exe'
+            - '\netstat.exe'
+            - '\tasklist.exe'
+            - '\systeminfo.exe'
+            - '\nltest.exe'
+            - '\nslookup.exe'
+    selection_parent_path:
+        ParentImage|contains:
+            - '\AppData\Local\Temp\'
+            - '\AppData\Roaming\'
+    condition: selection_recon and selection_parent_path
+falsepositives:
+    - Legitimate scripts or installers in temp directories that check
+      system information as part of normal operation (uncommon)
+    - Software update tools verifying system compatibility
+level: medium

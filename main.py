@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from winspector.alert_scorer import score_driver, score_event, score_process
+from winspector.config import ELASTIC_URL
 from winspector.dashboard import Dashboard
 from winspector.driver_scanner import DriverScanner
 from winspector.elastic_exporter import ElasticExporter
@@ -110,7 +111,7 @@ def main() -> None:
     miner   = EventLogMiner(db_path=Path("data") / "winspector.db")
 
     exporter = ElasticExporter(
-        elastic_url="http://192.168.91.129:9200",
+        elastic_url=ELASTIC_URL,
         index="winspector-alerts",
         batch_size=10,
     )
@@ -157,8 +158,8 @@ def main() -> None:
 
                 # Event log
                 new_events = miner.poll()
-                dashboard.state.last_event_poll = _now()
                 if new_events:
+                    dashboard.state.last_event_poll = _now()
                     for evt in new_events:
                         alert = score_event(evt)
                         dashboard.state.add_event(evt, alert)
@@ -178,9 +179,6 @@ def main() -> None:
 
                 # Flush any pending alerts to Elastic
                 exporter.flush()
-
-                # Redraw dashboard
-                dashboard.update()
 
         except KeyboardInterrupt:
             exporter.flush()  # flush remaining before exit

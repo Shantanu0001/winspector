@@ -1,1 +1,6 @@
-{"file": "data/loldrivers/drivers.json", "sha256": "22af1a1ad1d6b0e871355a9acc098023175f74cd9910f3c04769317f723b7f52", "entries": 623, "sha256_hashes": 2028, "downloaded_at": "2026-06-01T10:20:18.909469+00:00"}
+{
+  "file": "drivers.json",
+  "sha256": "22af1a1ad1d6b0e871355a9acc098023175f74cd9910f3c04769317f723b7f52",
+  "ts": "2026-06-11T06:57:33.624281+00:00",
+  "entries": 623
+}
