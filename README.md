@@ -124,11 +124,11 @@ flowchart LR
 | 1 | `process_watcher.py` | psutil + WMI process snapshot diff every 5 seconds. SHA-256 hashing and Authenticode signature verification via batched PowerShell. Signature cache with 10-minute TTL. |
 | 2 | `driver_scanner.py` | Enumerates loaded kernel drivers via Win32_SystemDriver. Hashes each `.sys` binary and checks against a local LOLDrivers database (623 entries, 2028 SHA-256 hashes). Integrity-verified on startup via SHA-256 manifest. |
 | 3 | `event_log_miner.py` | Incremental EvtQuery/EvtNext reader for Sysmon/Operational (EID 1,3,7,8,10,11), Security (EID 4688), and System (EID 7045). Cursor persisted in SQLite WAL-mode database. |
-| 4 | `alert_scorer.py` | 26 additive detection rules. Scoring is deterministic — same input always produces the same output. Rules are pure functions with no side effects. Score capped at 100. |
+| 4 | `alert_scorer.py` | 26 additive detection rules. Scoring is deterministic â€” same input always produces the same output. Rules are pure functions with no side effects. Score capped at 100. |
 | 5 | `dashboard.py` | Five-panel Rich terminal TUI: header, alerts, processes, event stream, driver scanner, status bar. |
 | 5 | `elastic_exporter.py` | Elasticsearch Bulk API export with SQLite-backed persistent queue. Alerts survive process crashes and are retried on reconnect. Supports HTTPS and API key authentication. |
-| — | `config.py` | Centralised configuration. All environment-specific values read from environment variables with safe defaults. No hardcoded addresses or credentials. |
-| — | `winspector_service.py` | Windows service wrapper using pywin32 ServiceFramework. Starts on boot, restarts after crash (3 attempts, 60-second delay). |
+| â€” | `config.py` | Centralised configuration. All environment-specific values read from environment variables with safe defaults. No hardcoded addresses or credentials. |
+| â€” | `winspector_service.py` | Windows service wrapper using pywin32 ServiceFramework. Starts on boot, restarts after crash (3 attempts, 60-second delay). |
 
 ---
 
@@ -163,7 +163,7 @@ flowchart LR
 | RULE-026 | Registry run key modification (reg add) | +55 | T1547.001 |
 | RULE-SVCINSTALL | New service installed (EID 7045) | +30 | T1543.003 |
 
-**Alert levels:** INFO (0-29) · LOW (30-49) · MEDIUM (50-74) · HIGH (75+)
+**Alert levels:** INFO (0-29) Â· LOW (30-49) Â· MEDIUM (50-74) Â· HIGH (75+)
 
 Scores are additive and capped at 100. A LOLDrivers hash match (RULE-012) returns 100 immediately.
 
@@ -173,10 +173,10 @@ Scores are additive and capped at 100. A LOLDrivers hash match (RULE-012) return
 
 Two detection rules derived from real observations, validated with sigma-cli 3.0.2 and converted to Elasticsearch Lucene queries.
 
-**`sigma_rules/temp_exe_outbound_connection.yml`** — severity: HIGH
+**`sigma_rules/temp_exe_outbound_connection.yml`** â€” severity: HIGH
 Detects an executable running from %TEMP% or %APPDATA% making an outbound TCP connection to a non-standard port. MITRE: T1105, T1071.001.
 
-**`sigma_rules/recon_tool_from_suspicious_path.yml`** — severity: MEDIUM
+**`sigma_rules/recon_tool_from_suspicious_path.yml`** â€” severity: MEDIUM
 Detects reconnaissance tools (whoami, ipconfig, net, etc.) spawned by a parent process running from %TEMP% or %APPDATA%. MITRE: T1057, T1082, T1036.
 
 Lucene queries for Kibana Discover:
@@ -234,7 +234,7 @@ sysmon64.exe -accepteula -i sysmon_config.xml
 The service starts on boot, runs without a logged-in user, and restarts after crashes.
 
 ```powershell
-# Install and start — run as Administrator
+# Install and start â€” run as Administrator
 powershell -ExecutionPolicy Bypass -File install_service.ps1
 
 # Check status
@@ -316,7 +316,7 @@ A msfvenom x64 reverse_tcp stager was analysed with Detect-It-Easy and PE-bear. 
 
 ## Dependencies
 
-**Runtime** — pinned with SHA-256 hashes in `requirements-pinned.txt`:
+**Runtime** â€” pinned with SHA-256 hashes in `requirements-pinned.txt`:
 
 | Package | Version | Purpose |
 |---|---|---|
@@ -344,13 +344,13 @@ pip install -r requirements-pinned.txt --require-hashes
 
 The following are known gaps versus a production EDR, along with the path to address each one.
 
-### User-mode process — terminable by an attacker
+### User-mode process â€” terminable by an attacker
 
 **Gap:** WinSpector runs as a user-mode elevated process. An attacker with administrator rights can terminate it with `taskkill /f /im python.exe`.
 
-**Solution:** The full solution requires a Windows kernel minifilter driver registered with protected-process status (`PS_PROTECTED_ANTIMALWARE_LIGHT`). This needs an EV (Extended Validation) code signing certificate (~$500/year from DigiCert or Sectigo) and a WHQL submission to Microsoft (2–4 weeks, free). Microsoft co-signs the binary, and only then does Windows grant the protection level at load time.
+**Solution:** The full solution requires a Windows kernel minifilter driver registered with protected-process status (`PS_PROTECTED_ANTIMALWARE_LIGHT`). This needs an EV (Extended Validation) code signing certificate (~$500/year from DigiCert or Sectigo) and a WHQL submission to Microsoft (2â€“4 weeks, free). Microsoft co-signs the binary, and only then does Windows grant the protection level at load time.
 
-An interim partial hardening — available now without WHQL — is to modify the service's DACL to deny `PROCESS_TERMINATE` to the Administrators group, allowing only SYSTEM to stop it. This is implemented in `winspector_service.py` via `win32security`. It stops casual `taskkill` but does not stop a SYSTEM-level attacker.
+An interim partial hardening â€” available now without WHQL â€” is to modify the service's DACL to deny `PROCESS_TERMINATE` to the Administrators group, allowing only SYSTEM to stop it. This is implemented in `winspector_service.py` via `win32security`. It stops casual `taskkill` but does not stop a SYSTEM-level attacker.
 
 ---
 
@@ -366,13 +366,13 @@ An interim partial hardening — available now without WHQL — is to modify the ser
 
 **Gap:** WinSpector reads from the Sysmon event log. A privileged attacker can unload the Sysmon driver (`fltMC unload SysmonDrv`) or clear event logs faster than the 5-second poll interval, creating a blind spot.
 
-**Solution:** Replace event log polling with direct ETW (Event Tracing for Windows) consumption. The kernel providers `Microsoft-Windows-Kernel-Process` (GUID `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`) and `Microsoft-Windows-Kernel-Network` deliver process and network events in real time via callback, bypassing the event log entirely. This can be implemented in Python using `ctypes` to call `StartTrace`, `EnableTraceEx2`, `OpenTrace`, and `ProcessTrace` — no kernel driver required for the consumer side. Events arrive within milliseconds rather than at 5-second intervals, and log clearing has no effect on the ETW stream.
+**Solution:** Replace event log polling with direct ETW (Event Tracing for Windows) consumption. The kernel providers `Microsoft-Windows-Kernel-Process` (GUID `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`) and `Microsoft-Windows-Kernel-Network` deliver process and network events in real time via callback, bypassing the event log entirely. This can be implemented in Python using `ctypes` to call `StartTrace`, `EnableTraceEx2`, `OpenTrace`, and `ProcessTrace` â€” no kernel driver required for the consumer side. Events arrive within milliseconds rather than at 5-second intervals, and log clearing has no effect on the ETW stream.
 
 ---
 
 ### Alert deduplication
 
-**Gap:** High-frequency events — such as repeated LSASS access by Task Manager — generate one alert per event, flooding the panel (66 alerts were observed in a single session during RULE-019 testing).
+**Gap:** High-frequency events â€” such as repeated LSASS access by Task Manager â€” generate one alert per event, flooding the panel (66 alerts were observed in a single session during RULE-019 testing).
 
 **Solution:** Add a deduplication layer in `alert_scorer.py` or `dashboard.py` that groups alerts by rule + entity within a rolling time window (e.g. 60 seconds). The first occurrence fires immediately; subsequent identical alerts within the window increment a counter rather than creating new entries. This is a straightforward in-memory change requiring no new dependencies.
 
@@ -382,7 +382,7 @@ An interim partial hardening — available now without WHQL — is to modify the ser
 
 **Gap:** 26 rules cover a subset of MITRE ATT&CK. Real-world attackers use hundreds of techniques not currently detected.
 
-**Solution:** The scoring framework is designed for extension — adding a rule is adding a conditional block in `score_event()`. Priority additions would cover: DLL hijacking (T1574.001), token impersonation (T1134), named pipe creation (T1559), UAC bypass patterns (T1548.002), and AMSI bypass via memory patching. Each new rule should follow the pattern: derive from a real observation, write the condition, validate with a live test, document the MITRE technique.
+**Solution:** The scoring framework is designed for extension â€” adding a rule is adding a conditional block in `score_event()`. Priority additions would cover: DLL hijacking (T1574.001), token impersonation (T1134), named pipe creation (T1559), UAC bypass patterns (T1548.002), and AMSI bypass via memory patching. Each new rule should follow the pattern: derive from a real observation, write the condition, validate with a live test, document the MITRE technique.
 
 ---
 
@@ -398,10 +398,4 @@ An interim partial hardening — available now without WHQL — is to modify the ser
 
 **Gap:** One WinSpector instance monitors one host. There is no aggregation across multiple endpoints.
 
-**Solution:** The Elasticsearch export is already the aggregation layer. Deploying WinSpector as a service on multiple endpoints — each pointing `WINSPECTOR_ELASTIC_URL` at the same Elasticsearch cluster — produces a multi-host alert feed in Kibana automatically. The `computer` field in every exported alert identifies the source host. No code changes are required; only deployment and `WINSPECTOR_COMPUTER_NAME` configuration per host.
-
----
-
-## Author
-
-helix-d3t0x · [github.com/Shantanu0001/winspector](https://github.com/Shantanu0001/winspector)
+**Solution:** The Elasticsearch export is already the aggregation layer. Deploying WinSpector as a service on multiple endpoints â€” each pointing `WINSPECTOR_ELASTIC_URL` at the same Elasticsearch cluster â€” produces a multi-host alert feed in Kibana automatically. The `computer` field in every exported alert identifies the source host. No code changes are required; only deployment and `WINSPECTOR_COMPUTER_NAME` configuration per host.
